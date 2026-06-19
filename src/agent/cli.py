@@ -23,6 +23,18 @@ if settings.langfuse_enabled:
 from langfuse.decorators import langfuse_context, observe  # noqa: E402
 
 
+def _extract_text(content) -> str:
+    """Normalise le contenu LLM : Gemini/Vertex renvoie parfois une liste de blocs."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            p if isinstance(p, str) else p.get("text", "") if isinstance(p, dict) else ""
+            for p in content
+        )
+    return str(content)
+
+
 # ─────────────────────────────────────────────
 # Tracing d'un nœud LangGraph comme span enfant
 # ─────────────────────────────────────────────
@@ -35,7 +47,7 @@ def _trace_node(node_name: str, state_update: dict) -> None:
     langfuse_context.update_current_observation(
         name=node_name,
         input={"node": node_name, "n_messages": len(msgs)},
-        output={"content": str(last.content)[:1000]} if last else {},
+        output={"content": _extract_text(last.content)[:1000]} if last else {},
         metadata={
             "message_type": type(last).__name__ if last else None,
             "tool_calls": bool(getattr(last, "tool_calls", None)),
@@ -117,7 +129,7 @@ def main() -> None:
         conversation_history.append(HumanMessage(content=user_input))
         conversation_history = run_turn(agent, conversation_history, args.mode)
 
-        print(f"\n🤖 Agent : {conversation_history[-1].content}")
+        print(f"\n🤖 Agent : {_extract_text(conversation_history[-1].content)}")
         print("─" * 60)
 
 

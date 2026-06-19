@@ -37,12 +37,27 @@ def _conn_string() -> str:
     return settings.database_url.replace("postgresql+psycopg://", "postgresql://")
 
 
+def _extract_text(content) -> str:
+    """Normalise le contenu LLM : Gemini renvoie parfois une liste de blocs."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(part.get("text", ""))
+        return "".join(parts).strip()
+    return str(content).strip()
+
+
 def _generate_sql(llm, question: str) -> str:
     messages = [
         SystemMessage(content=_SQL_GENERATION_PROMPT.format(schema=get_schema())),
         HumanMessage(content=question),
     ]
-    return llm.invoke(messages).content.strip()
+    return _extract_text(llm.invoke(messages).content)
 
 
 def _correct_sql(llm, sql: str, error: str, question: str) -> str:
@@ -51,7 +66,7 @@ def _correct_sql(llm, sql: str, error: str, question: str) -> str:
             content=_SQL_CORRECTION_PROMPT.format(sql=sql, error=error, question=question)
         ),
     ]
-    return llm.invoke(messages).content.strip()
+    return _extract_text(llm.invoke(messages).content)
 
 
 def _execute_sql(sql: str) -> list[dict]:
