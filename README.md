@@ -11,23 +11,31 @@ Le projet tourne sur **Vertex AI (Gemini)** et est conçu autour d'une factory d
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   Conseiller (CLI)                  │
+│           src/agent/cli.py --mode react|langgraph   │
 └──────────────────────┬──────────────────────────────┘
                        │
-              ┌────────▼────────┐
-              │  LangGraph Agent │  ← src/agent/agent.py
-              └────────┬────────┘
+         ┌─────────────┴──────────────┐
+         │                            │
+┌────────▼────────┐        ┌──────────▼──────────┐
+│  ReAct Agent    │        │  LangGraph Agent     │
+│ (prebuilt,      │        │  (StateGraph custom, │
+│  mode défaut)   │        │   flux explicite)    │
+└────────┬────────┘        └──────────┬───────────┘
+         └─────────────┬──────────────┘
+                       │ tools partagés
           ┌────────────┴────────────┐
           │                         │
-   ┌──────▼──────┐          ┌───────▼──────┐
-   │  RAG Tool   │          │  SQL Tool    │
-   │ (procédures)│          │ (transactions│
-   │             │          │ + self-corr.)│
-   └──────┬──────┘          └───────┬──────┘
+   ┌──────▼──────┐          ┌───────▼──────────┐
+   │  RAG Tool   │          │  SQL Tool        │
+   │ retrieve_   │          │  query_client_   │
+   │ procedures()│          │  data()          │
+   │             │          │  + self-corr. ×3 │
+   └──────┬──────┘          └───────┬──────────┘
           │                         │
    ┌──────▼──────┐          ┌───────▼──────┐
    │  pgvector   │          │  PostgreSQL  │
-   │ (embeddings)│          │  (clients,   │
-   │             │          │  transactions│
+   │  hybride    │          │  (clients,   │
+   │ dense+BM25  │          │  transactions│
    └─────────────┘          └─────────────┘
           │                         │
           └────────────┬────────────┘
@@ -111,7 +119,11 @@ Affiche les top-5 chunks les plus pertinents avec leur score RRF et le fichier s
 ### 7. Lancer l'agent
 
 ```bash
-uv run python src/agent/agent.py
+# Mode ReAct (défaut) — create_react_agent prebuilt
+uv run python src/agent/cli.py
+
+# Mode LangGraph — StateGraph custom avec nœuds explicites
+uv run python src/agent/cli.py --mode langgraph
 ```
 
 ---
@@ -132,13 +144,16 @@ bforbank-agent/
     ├── config.py                # Configuration via pydantic-settings
     ├── llm_factory.py           # Factory LLM/Embeddings (pattern provider)
     ├── agent/
-    │   └── agent.py             # Graph LangGraph + CLI interactif
+    │   ├── cli.py               # Entrypoint CLI (--mode react|langgraph)
+    │   ├── agent_react.py       # Agent ReAct (create_react_agent prebuilt)
+    │   └── agent_langgraph.py   # Agent LangGraph (StateGraph custom)
     ├── tools/
-    │   ├── rag_tool.py          # Recherche dans les procédures
-    │   └── sql_tool.py          # Text-to-SQL avec boucle de self-correction
+    │   ├── rag_tool.py          # @tool retrieve_procedures — recherche hybride
+    │   ├── sql_tool.py          # @tool query_client_data — Text-to-SQL + self-correction ×3
+    │   └── schema_inspector.py  # DDL du schéma pour la génération SQL
     └── indexer/
         ├── indexer.py           # Indexation des procédures dans pgvector
-        └── retriever.py         # Recherche vectorielle (dense + hybride BM25)
+        └── retriever.py         # Recherche hybride dense + tsvector (RRF)
 ```
 
 ---

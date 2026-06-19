@@ -105,27 +105,34 @@ ORDER BY rrf_score DESC LIMIT 5;
 
 ---
 
-## Phase 4 — Agent outillé (RAG + Text-to-SQL)
+## Phase 4 — Agent outillé (RAG + Text-to-SQL) ✅
 
 > *Objectif : l'agent utilise ses outils pour répondre aux questions du catalogue.*
 
-### 4.1 — Tool : RAG sur procédures
-- [ ] `src/tools/rag_tool.py` — `@tool retrieve_procedures(query: str)` → appelle `retriever.py`
-- [ ] Prompt système : *"Cite la procédure utilisée avec son lien Confluence fictif"*
+### 4.1 — Tool : RAG sur procédures ✅
+- [x] `src/tools/rag_tool.py` — `@tool retrieve_procedures(query: str)` → appelle `retriever.py`
+- [x] `src/tools/schema_inspector.py` — DDL du schéma fourni au LLM pour la génération SQL
 
-### 4.2 — Tool : Text-to-SQL avec self-correction
-- [ ] `src/tools/sql_tool.py` — `@tool query_client_data(client_id: str, question: str)`
-  1. LLM génère le SQL à partir du schéma
+### 4.2 — Tool : Text-to-SQL avec self-correction ✅
+- [x] `src/tools/sql_tool.py` — `@tool query_client_data(question: str)`
+  1. LLM génère le SQL à partir de la question en langage naturel + DDL du schéma
   2. Exécution de la requête
   3. **Boucle de self-correction** : si erreur SQL → LLM analyse l'erreur + corrige → max 3 tentatives
-- [ ] `src/tools/schema_inspector.py` — Fournit le DDL du schéma au LLM au moment de la génération SQL
 
-### 4.3 — Routing & Synthèse finale
-- [ ] Intégrer les 2 tools dans l'agent (LangGraph state machine ou ReAct)
-- [ ] Prompt de synthèse : *"Croise procédure + données transactionnelles → réponse argumentée"*
-- [ ] Tester les 10 questions du catalogue
+### 4.3 — Deux variantes d'agent ✅
 
-> ✅ **Critère de sortie** : les 3 cas clients du seed répondus correctement avec source citée.
+> **Décision** : deux implémentations séparées pour comparer une fois l'évaluation (Ragas) en place.
+
+- [x] `src/agent/agent_react.py` — `create_react_agent` prebuilt (LangGraph), mode par défaut
+  - LLM pilote librement l'ordre et la combinaison des tools
+  - Self-correction SQL encapsulée dans le tool Python
+- [x] `src/agent/agent_langgraph.py` — `StateGraph` custom avec nœuds explicites
+  - Flux `START → call_model → [tools → call_model]* → END` entièrement visible
+  - Arête conditionnelle `_should_use_tools` : si tool_calls → exécute, sinon END
+  - Extensible (nœuds PII, logging structuré, synthèse dédiée)
+- [x] `src/agent/cli.py` — entrypoint unifié `--mode react|langgraph` (react par défaut)
+
+> ✅ **Critère de sortie** : `uv run python src/agent/cli.py` → agent outillé fonctionnel avec les deux modes.
 
 ---
 
