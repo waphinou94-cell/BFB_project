@@ -14,6 +14,18 @@ from langchain_core.messages import HumanMessage
 from src.config import settings
 
 
+def _get_langfuse_callback():
+    """Retourne le callback Langfuse si configuré, sinon None."""
+    if not settings.langfuse_enabled:
+        return None
+    from langfuse.callback import CallbackHandler
+    return CallbackHandler(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        host=settings.langfuse_host,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BforBank Agent CLI")
     parser.add_argument(
@@ -31,10 +43,15 @@ def main() -> None:
         from src.agent.agent_langgraph import build_langgraph_agent
         agent = build_langgraph_agent()
 
+    langfuse_cb = _get_langfuse_callback()
+    run_config = {"callbacks": [langfuse_cb]} if langfuse_cb else {}
+
     conversation_history: list = []
 
     print(f"\n🏦 BforBank Agent — Mode : {args.mode.upper()}")
     print(f"   Modèle : {settings.llm_model} [{settings.llm_provider}]")
+    if langfuse_cb:
+        print(f"   Traces : {settings.langfuse_host}")
     print("   Tapez 'exit' ou 'quit' pour quitter.\n")
     print("─" * 60)
 
@@ -52,7 +69,7 @@ def main() -> None:
             break
 
         conversation_history.append(HumanMessage(content=user_input))
-        result = agent.invoke({"messages": conversation_history})
+        result = agent.invoke({"messages": conversation_history}, config=run_config)
         conversation_history = result["messages"]
 
         print(f"\n🤖 Agent : {result['messages'][-1].content}")

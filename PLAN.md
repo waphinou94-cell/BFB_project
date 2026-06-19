@@ -146,9 +146,11 @@ ORDER BY rrf_score DESC LIMIT 5;
   - Option B : regex rules + NER pour les cas bancaires (IBAN, n° carte, etc.)
 - [ ] Pipeline : `requête → anonymisation → LLM → réponse → dé-anonymisation`
 
-### 5.2 — Observabilité
-- [ ] Intégrer **Langfuse** (auto-hébergé en Docker ou cloud free tier) ou **Phoenix (Arize)**
-- [ ] Tracer : chaque tool call, le SQL généré, les chunks RAG récupérés, la synthèse finale
+### 5.2 — Observabilité ✅
+- [x] **Langfuse v2** auto-hébergé via Docker (service `langfuse` + `langfuse-postgres` dans `docker-compose.yaml`)
+- [x] Callback LangChain branché dans `cli.py` — trace automatiquement tous les appels LLM, tool calls, SQL généré, chunks RAG récupérés, synthèse finale
+- [x] Désactivable : si `LANGFUSE_PUBLIC_KEY` est vide dans `.env`, l'observabilité est silencieusement ignorée
+- [x] UI disponible sur `http://localhost:3000` après `docker compose up`
 
 ### 5.3 — README Production-Ready
 - [ ] Instructions d'installation (`docker-compose up`, `pip install`, variables d'env)

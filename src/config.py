@@ -30,5 +30,14 @@ class Settings(BaseSettings):
     # Base de données
     database_url: str = "postgresql+psycopg://bforbank:bforbank@localhost:5432/bforbank"
 
+    # Langfuse (optionnel — désactivé si public_key est vide)
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "http://localhost:3000"
+
+    @property
+    def langfuse_enabled(self) -> bool:
+        return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
 
 settings = Settings()

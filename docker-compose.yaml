@@ -18,5 +18,38 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── Observabilité : Langfuse ──────────────────────────────────────────────
+
+  langfuse-postgres:
+    image: postgres:16
+    container_name: langfuse_db
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: bforbank-langfuse-secret
+      SALT: bforbank-langfuse-salt
+      TELEMETRY_ENABLED: "false"
+    depends_on:
+      langfuse-postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  langfuse_postgres_data:

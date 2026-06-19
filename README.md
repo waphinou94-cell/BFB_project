@@ -83,14 +83,18 @@ VERTEX_PROJECT=your-gcp-project-id
 
 Les autres valeurs par défaut (`gemini-3.1-flash-lite`, `global`) peuvent être conservées.
 
-### 3. Démarrer la base de données
+### 3. Démarrer les services
 
 ```bash
 docker-compose up -d
-docker-compose ps   # attendre STATUS: healthy
+docker-compose ps   # attendre STATUS: healthy pour postgres et langfuse
 ```
 
-La base PostgreSQL est automatiquement initialisée avec le schéma (`data/sql/schema.sql`) et les données de test (`data/sql/seed.sql`).
+Lance :
+- **PostgreSQL** (`localhost:5432`) — base transactionnelle avec schéma et données de test
+- **Langfuse** (`http://localhost:3000`) — UI d'observabilité
+
+> **Première utilisation de Langfuse** : ouvrir `http://localhost:3000`, créer un compte, puis un projet. Copier les clés Public/Secret dans `.env`.
 
 ### 4. Installer les dépendances Python
 
@@ -197,6 +201,20 @@ SELECT source, COUNT(*) AS nb_chunks FROM procedures GROUP BY source ORDER BY so
 -- Vérifier qu'un embedding est bien stocké
 SELECT id, source, LEFT(content, 80) AS extrait FROM procedures LIMIT 5;
 ```
+
+---
+
+## Observabilité
+
+Langfuse trace automatiquement chaque requête dès que `LANGFUSE_PUBLIC_KEY` et `LANGFUSE_SECRET_KEY` sont renseignés dans `.env`.
+
+Sont tracés : appels LLM, tool calls, SQL généré par le Text-to-SQL, tentatives de self-correction, chunks RAG récupérés, synthèse finale.
+
+```
+http://localhost:3000   ← UI Langfuse (traces, latences, coûts par requête)
+```
+
+L'observabilité est **optionnelle** — si les clés sont absentes, l'agent fonctionne normalement sans trace.
 
 ---
 

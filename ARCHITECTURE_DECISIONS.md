@@ -62,7 +62,19 @@ Adapté aux procédures Markdown : assez grand pour conserver le contexte d'une 
 
 ---
 
-## 7. Deux variantes d'agent : ReAct vs LangGraph custom
+## 7. Observabilité : Langfuse v2 auto-hébergé
+
+**Choix** : Langfuse v2 self-hosted via Docker plutôt que le cloud Langfuse ou Phoenix/Arize.
+
+Langfuse v2 ne nécessite qu'un PostgreSQL dédié — aucun ClickHouse, aucun service externe. Un service `langfuse` + un `langfuse-postgres` dans `docker-compose.yaml` suffisent. L'UI est disponible sur `http://localhost:3000`.
+
+L'intégration avec LangChain se fait via un `CallbackHandler` passé au `config` de `agent.invoke()` — aucune modification aux tools ni aux agents. Tous les appels LLM imbriqués (y compris dans la boucle de self-correction SQL) sont capturés automatiquement.
+
+L'observabilité est optionnelle : si `LANGFUSE_PUBLIC_KEY` est vide dans `.env`, le callback n'est pas instancié et l'agent tourne normalement.
+
+---
+
+## 9. Deux variantes d'agent : ReAct vs LangGraph custom
 
 **Choix** : deux implémentations distinctes coexistent — `agent_react.py` et `agent_langgraph.py` — sélectionnables via `cli.py --mode react|langgraph`.
 
