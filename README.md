@@ -78,8 +78,8 @@ Les autres valeurs par défaut (`gemini-3.1-flash-lite`, `global`) peuvent être
 ### 3. Démarrer la base de données
 
 ```bash
-docker compose up -d
-docker compose ps   # attendre STATUS: healthy
+docker-compose up -d
+docker-compose ps   # attendre STATUS: healthy
 ```
 
 La base PostgreSQL est automatiquement initialisée avec le schéma (`data/sql/schema.sql`) et les données de test (`data/sql/seed.sql`).
@@ -96,9 +96,19 @@ uv sync
 uv run python src/indexer/indexer.py
 ```
 
-Génère les embeddings des fichiers `data/procedures/*.md` et les stocke dans pgvector. Opération **idempotente**.
+Génère les embeddings des fichiers `data/procedures/*.md` et les stocke dans pgvector (recherche hybride dense + tsvector). Opération **idempotente**.
 
-### 6. Lancer l'agent
+### 6. Tester le retriever
+
+```bash
+# Recherche hybride directe (passe la requête en argument)
+uv run python src/indexer/retriever.py "remboursement frais bancaires"
+uv run python src/indexer/retriever.py "opposition carte bancaire"
+```
+
+Affiche les top-5 chunks les plus pertinents avec leur score RRF et le fichier source.
+
+### 7. Lancer l'agent
 
 ```bash
 uv run python src/agent/agent.py
@@ -141,6 +151,37 @@ Le provider est sélectionné via `LLM_PROVIDER` dans `.env`. Le code métier ne
 |----------------|-----------------|-------------------|
 | `vertexai` *(défaut)* | ADC (`gcloud auth application-default login`) | `gemini-3.1-flash-lite` |
 | `openai` | `LLM_API_KEY=sk-...` | `gpt-4o-mini` |
+
+---
+
+## Visualiser la base de données
+
+Connexion interactive avec psql (autocomplétion, historique) :
+
+```bash
+docker exec -it bforbank_db psql -U bforbank -d bforbank
+```
+
+Quelques requêtes utiles une fois connecté :
+
+```sql
+-- Tables disponibles
+\dt
+
+-- Clients et soldes
+SELECT id, nom, prenom, solde, decouvert_autorise FROM clients;
+
+-- Dernières transactions par client
+SELECT c.nom, t.date_transaction, t.montant, t.libelle, t.statut
+FROM transactions t JOIN clients c ON c.id = t.client_id
+ORDER BY t.date_transaction DESC LIMIT 20;
+
+-- Procédures indexées (chunks)
+SELECT source, COUNT(*) AS nb_chunks FROM procedures GROUP BY source ORDER BY source;
+
+-- Vérifier qu'un embedding est bien stocké
+SELECT id, source, LEFT(content, 80) AS extrait FROM procedures LIMIT 5;
+```
 
 ---
 

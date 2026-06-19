@@ -22,25 +22,22 @@ Phase 5 → Production-isation (PII, observabilité, README)
 > *Objectif : avoir des données réalistes sur lesquelles tester chaque brique.*
 
 ### 1.1 — Répertoire `data/procedures/`
-- [ ] Créer 4-6 fichiers Markdown de procédures BforBank :
-  - `fraude_president.md` — Détection et traitement de la fraude au président
+- [ ] Créer 4-5 fichiers Markdown de procédures BforBank :
   - `remboursement_frais.md` — Politique de remboursement des frais bancaires
   - `litige_transaction.md` — Procédure de contestation d'une transaction
-  - `solvabilite.md` — Critères et process d'analyse de solvabilité
-  - `carte_opposition.md` — Procédure d'opposition sur carte
+  - `analyse_solvabilite.md` — Critères et process d'analyse de solvabilité
+  - `opposition_carte.md` — Procédure d'opposition sur carte
 - [ ] Chaque fichier contient : contexte, étapes, critères de décision, lien Confluence fictif
 
 ### 1.2 — Schéma PostgreSQL + Mock Data
 - [ ] `docker-compose.yaml` avec `pgvector/pgvector:pg16`
-- [ ] `data/sql/schema.sql` — Tables : `clients`, `comptes`, `transactions`, `alertes_fraude`
+- [ ] `data/sql/schema.sql` — Tables : `clients`, `transactions`
 - [ ] `data/sql/seed.sql` — 3 à 5 clients fictifs avec historique transactionnel varié :
-  - Un client avec pattern fraude récent
   - Un client avec frais contestables
   - Un client standard (contrôle)
 
 ### 1.3 — Catalogue de questions de test
 - [ ] `data/test_questions.md` — 10 questions représentatives, par exemple :
-  - *"Le client Jean Dupont a-t-il subi une fraude au président ?"*
   - *"Quels frais peut-on rembourser à Marie Martin selon nos procédures ?"*
   - *"Montre-moi les 5 dernières transactions de Pierre Durand et analyse les risques."*
 
