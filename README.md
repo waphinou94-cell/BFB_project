@@ -75,10 +75,16 @@ gcloud auth application-default login
 cp .env.example .env
 ```
 
-Éditer `.env` et renseigner votre `VERTEX_PROJECT` (votre GCP project ID) :
+Ouvrir `.env` et renseigner au minimum :
 
 ```bash
+# GCP project ID (obligatoire)
 VERTEX_PROJECT=your-gcp-project-id
+
+# Langfuse — remplir après l'étape 3b ci-dessous (optionnel)
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=http://localhost:3000
 ```
 
 Les autres valeurs par défaut (`gemini-3.1-flash-lite`, `global`) peuvent être conservées.
@@ -86,15 +92,28 @@ Les autres valeurs par défaut (`gemini-3.1-flash-lite`, `global`) peuvent être
 ### 3. Démarrer les services
 
 ```bash
-docker-compose up -d
-docker-compose ps   # attendre STATUS: healthy pour postgres et langfuse
+docker compose up -d
+docker compose ps   # attendre STATUS: healthy pour postgres et langfuse
 ```
 
-Lance :
-- **PostgreSQL** (`localhost:5432`) — base transactionnelle avec schéma et données de test
+Lance deux services :
+- **PostgreSQL** (`localhost:5432`) — base transactionnelle, schéma et données de test injectés automatiquement
 - **Langfuse** (`http://localhost:3000`) — UI d'observabilité
 
-> **Première utilisation de Langfuse** : ouvrir `http://localhost:3000`, créer un compte, puis un projet. Copier les clés Public/Secret dans `.env`.
+#### 3b. Configurer Langfuse (première fois)
+
+1. Ouvrir `http://localhost:3000`
+2. Cliquer **Sign Up** → créer un compte local (email/mot de passe arbitraires, rien n'est envoyé)
+3. Créer une **organisation** puis un **projet** (ex: `bforbank`)
+4. Dans le projet → **Settings** → **API Keys** → **Create new API key**
+5. Copier la **Public Key** (`pk-lf-...`) et la **Secret Key** (`sk-lf-...`) dans `.env`
+
+> **Sur une VM distante** : Langfuse n'est pas accessible depuis `localhost` de votre machine. Forwarder le port avant d'ouvrir le navigateur :
+> ```bash
+> # Sur votre machine locale
+> ssh -L 3000:localhost:3000 <user>@<ip-vm>
+> ```
+> Puis ouvrir `http://localhost:3000` dans votre navigateur.
 
 ### 4. Installer les dépendances Python
 
@@ -113,7 +132,6 @@ Génère les embeddings des fichiers `data/procedures/*.md` et les stocke dans p
 ### 6. Tester le retriever
 
 ```bash
-# Recherche hybride directe (passe la requête en argument)
 uv run python src/indexer/retriever.py "remboursement frais bancaires"
 uv run python src/indexer/retriever.py "opposition carte bancaire"
 ```
@@ -130,13 +148,32 @@ uv run python src/agent/cli.py
 uv run python src/agent/cli.py --mode langgraph
 ```
 
+Les traces apparaissent dans Langfuse à `http://localhost:3000` dès que les clés sont renseignées dans `.env`.
+
+---
+
+## Configuration `.env` complète
+
+| Variable | Obligatoire | Description |
+|----------|-------------|-------------|
+| `VERTEX_PROJECT` | **oui** | GCP project ID |
+| `VERTEX_LOCATION` | non | Région Vertex AI (défaut : `global`) |
+| `LLM_MODEL` | non | Modèle Gemini (défaut : `gemini-3.1-flash-lite`) |
+| `EMBEDDING_MODEL` | non | Modèle d'embedding (défaut : `text-multilingual-embedding-002`) |
+| `DATABASE_URL` | non | URL PostgreSQL (défaut : `postgresql+psycopg://bforbank:bforbank@localhost:5432/bforbank`) |
+| `LANGFUSE_PUBLIC_KEY` | non | Clé publique Langfuse (`pk-lf-...`) |
+| `LANGFUSE_SECRET_KEY` | non | Clé secrète Langfuse (`sk-lf-...`) |
+| `LANGFUSE_HOST` | non | URL Langfuse (défaut : `http://localhost:3000`) |
+
+> Pour utiliser **OpenAI** à la place de Vertex AI : `LLM_PROVIDER=openai`, `LLM_API_KEY=sk-...`
+
 ---
 
 ## Structure du projet
 
 ```
 bforbank-agent/
-├── docker-compose.yaml          # PostgreSQL avec pgvector
+├── docker-compose.yaml          # PostgreSQL + pgvector + Langfuse
 ├── pyproject.toml               # Dépendances Python (uv)
 ├── .env.example                 # Template de configuration
 ├── data/
@@ -173,20 +210,32 @@ Le provider est sélectionné via `LLM_PROVIDER` dans `.env`. Le code métier ne
 
 ---
 
-## Visualiser la base de données
+## Observabilité
 
-Connexion interactive avec psql (autocomplétion, historique) :
+Langfuse trace automatiquement chaque tour de conversation dès que `LANGFUSE_PUBLIC_KEY` et `LANGFUSE_SECRET_KEY` sont renseignés dans `.env`.
+
+En mode `langgraph`, chaque nœud du graph (`call_model`, `tools`) apparaît comme un span enfant dans la trace — ce qui permet de voir exactement par quelles étapes l'agent est passé pour construire sa réponse.
+
+```
+Trace : bforbank-langgraph
+├── Span : call_model      ← LLM décide d'appeler un tool
+├── Span : tools           ← RAG ou SQL exécuté
+└── Span : call_model      ← synthèse finale
+```
+
+UI disponible sur `http://localhost:3000` (ou via SSH port-forward depuis une VM).
+
+L'observabilité est **optionnelle** — si les clés sont absentes du `.env`, l'agent fonctionne normalement sans envoyer de traces.
+
+---
+
+## Visualiser la base de données
 
 ```bash
 docker exec -it bforbank_db psql -U bforbank -d bforbank
 ```
 
-Quelques requêtes utiles une fois connecté :
-
 ```sql
--- Tables disponibles
-\dt
-
 -- Clients et soldes
 SELECT id, nom, prenom, solde, decouvert_autorise FROM clients;
 
@@ -195,26 +244,9 @@ SELECT c.nom, t.date_transaction, t.montant, t.libelle, t.statut
 FROM transactions t JOIN clients c ON c.id = t.client_id
 ORDER BY t.date_transaction DESC LIMIT 20;
 
--- Procédures indexées (chunks)
+-- Procédures indexées
 SELECT source, COUNT(*) AS nb_chunks FROM procedures GROUP BY source ORDER BY source;
-
--- Vérifier qu'un embedding est bien stocké
-SELECT id, source, LEFT(content, 80) AS extrait FROM procedures LIMIT 5;
 ```
-
----
-
-## Observabilité
-
-Langfuse trace automatiquement chaque requête dès que `LANGFUSE_PUBLIC_KEY` et `LANGFUSE_SECRET_KEY` sont renseignés dans `.env`.
-
-Sont tracés : appels LLM, tool calls, SQL généré par le Text-to-SQL, tentatives de self-correction, chunks RAG récupérés, synthèse finale.
-
-```
-http://localhost:3000   ← UI Langfuse (traces, latences, coûts par requête)
-```
-
-L'observabilité est **optionnelle** — si les clés sont absentes, l'agent fonctionne normalement sans trace.
 
 ---
 
