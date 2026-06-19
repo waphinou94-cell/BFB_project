@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: bforbank_db
+    environment:
+      POSTGRES_USER: bforbank
+      POSTGRES_PASSWORD: bforbank
+      POSTGRES_DB: bforbank
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./data/sql/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bforbank -d bforbank"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

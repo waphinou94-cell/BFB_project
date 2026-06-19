@@ -1,0 +1,38 @@
+[project]
+name = "bforbank-agent"
+version = "0.1.0"
+description = "Agent IA Copilote pour les conseillers BforBank — Agentic RAG + Text-to-SQL"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-community>=0.3",
+    "langchain-postgres>=0.0.12",
+    "openai>=1.0",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
+    "python-dotenv>=1.0",
+    "tiktoken>=0.7",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "langchain-google-genai>=4.2.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython",
+    "rich",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ipython",
+    "rich",
+]
