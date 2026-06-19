@@ -62,15 +62,37 @@ Adapté aux procédures Markdown : assez grand pour conserver le contexte d'une 
 
 ---
 
-## 7. Observabilité : Langfuse v2 auto-hébergé
+## 7. Observabilité : Langfuse v2 auto-hébergé + décorateur `@observe`
 
-**Choix** : Langfuse v2 self-hosted via Docker plutôt que le cloud Langfuse ou Phoenix/Arize.
+### Choix de la plateforme
 
-Langfuse v2 ne nécessite qu'un PostgreSQL dédié — aucun ClickHouse, aucun service externe. Un service `langfuse` + un `langfuse-postgres` dans `docker-compose.yaml` suffisent. L'UI est disponible sur `http://localhost:3000`.
+**Langfuse v2 self-hosted** via Docker, plutôt que :
+- Langfuse cloud : nécessite d'envoyer des données à un service externe — problématique dans un contexte bancaire
+- Langfuse v3 : nécessite ClickHouse + MinIO + Redis en plus de PostgreSQL — surcharge opérationnelle injustifiée pour un POC
+- Phoenix/Arize : outillage différent, moins intégré à LangChain/LangGraph
 
-L'intégration avec LangChain se fait via un `CallbackHandler` passé au `config` de `agent.invoke()` — aucune modification aux tools ni aux agents. Tous les appels LLM imbriqués (y compris dans la boucle de self-correction SQL) sont capturés automatiquement.
+Langfuse v2 ne nécessite qu'un PostgreSQL dédié. Un service `langfuse` + `langfuse-postgres` dans `docker-compose.yaml` suffisent. L'UI est disponible sur `http://localhost:3000`.
 
-L'observabilité est optionnelle : si `LANGFUSE_PUBLIC_KEY` est vide dans `.env`, le callback n'est pas instancié et l'agent tourne normalement.
+### Choix de l'intégration : `@observe` plutôt que `CallbackHandler`
+
+Langfuse propose deux modes d'intégration LangChain :
+- `langfuse.callback.CallbackHandler` — s'injecte dans `agent.invoke(config={"callbacks": [...]})` et capture automatiquement tous les appels LLM imbriqués
+- `langfuse.decorators.observe` — décorateur Python standard, sans dépendance LangChain
+
+Le `CallbackHandler` a été écarté car il importe `langchain.callbacks.base` qui a été **supprimé dans LangChain 1.x** (le projet est sur `langchain==1.3.9`). L'import échoue à la compilation, rendant le module inutilisable.
+
+Le décorateur `@observe` est utilisé à la place : il wrape la fonction d'exécution d'un tour de conversation dans `cli.py` et crée une trace par échange. Pour le mode LangGraph, le graph est streamé via `agent.stream(stream_mode="updates")` qui expose les événements nœud par nœud — chaque nœud (`call_model`, `tools`) est tracé comme un span enfant via un `@observe` imbriqué.
+
+```
+Trace : bforbank-langgraph          ← @observe sur le tour de conversation
+├── Span : call_model               ← @observe sur l'événement de stream
+├── Span : tools
+└── Span : call_model
+```
+
+### Optionnalité
+
+Si `LANGFUSE_PUBLIC_KEY` est absent du `.env`, aucun callback ni décorateur n'est instancié — l'agent tourne normalement. Le branchement conditionnel est dans `cli.py` uniquement, les tools et agents n'ont aucune dépendance à Langfuse.
 
 ---
 
