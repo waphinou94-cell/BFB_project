@@ -20,8 +20,32 @@ if settings.langfuse_enabled:
     os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
     os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
 
-from langfuse.decorators import observe  # noqa: E402
+from langfuse.decorators import langfuse_context, observe  # noqa: E402
 
+
+# ─────────────────────────────────────────────
+# Tracing d'un nœud LangGraph comme span enfant
+# ─────────────────────────────────────────────
+
+@observe()
+def _trace_node(node_name: str, state_update: dict) -> None:
+    """Crée un span Langfuse pour un nœud du graph."""
+    msgs = state_update.get("messages", [])
+    last = msgs[-1] if msgs else None
+    langfuse_context.update_current_observation(
+        name=node_name,
+        input={"node": node_name, "n_messages": len(msgs)},
+        output={"content": str(last.content)[:1000]} if last else {},
+        metadata={
+            "message_type": type(last).__name__ if last else None,
+            "tool_calls": bool(getattr(last, "tool_calls", None)),
+        },
+    )
+
+
+# ─────────────────────────────────────────────
+# Exécution d'un tour de conversation
+# ─────────────────────────────────────────────
 
 def _run_turn(agent, messages: list, mode: str) -> list:
     result = agent.invoke({"messages": messages})
@@ -29,12 +53,25 @@ def _run_turn(agent, messages: list, mode: str) -> list:
 
 
 def _run_turn_traced(agent, messages: list, mode: str) -> list:
-    @observe(name=f"bforbank-agent-{mode}")
+    @observe(name=f"bforbank-{mode}")
     def _inner():
-        result = agent.invoke({"messages": messages})
-        return result["messages"]
+        # stream_mode="updates" → {node_name: state_update} à chaque nœud exécuté
+        accumulated = list(messages)
+        for event in agent.stream({"messages": messages}, stream_mode="updates"):
+            for node_name, state_update in event.items():
+                if node_name.startswith("__"):
+                    continue
+                _trace_node(node_name, state_update)
+                if "messages" in state_update:
+                    accumulated.extend(state_update["messages"])
+        return accumulated
+
     return _inner()
 
+
+# ─────────────────────────────────────────────
+# CLI principal
+# ─────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BforBank Agent CLI")
