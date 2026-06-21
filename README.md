@@ -10,26 +10,24 @@ Le projet tourne sur **Vertex AI (Gemini)** et est conçu autour d'une factory d
 
 ```mermaid
 graph TD
-    A[Conseiller CLI<br/>cli.py --mode react|langgraph] --> B{Mode}
+    A["Conseiller — CLI"] --> B{Mode}
 
-    B -->|react| C[ReAct Agent<br/>create_react_agent prebuilt]
-    B -->|langgraph| D[LangGraph Agent<br/>StateGraph custom]
+    B -->|react| C["ReAct Agent\ncreate_react_agent"]
+    B -->|langgraph| D["LangGraph Agent\nStateGraph custom"]
 
-    C --> E[Tools partagés]
+    C --> E["Tools partagés"]
     D --> E
 
-    E --> F[RAG Tool<br/>retrieve_procedures]
-    E --> G[SQL Tool<br/>query_client_data<br/>self-correction ×3]
+    E --> F["RAG Tool\nretrieve_procedures"]
+    E --> G["SQL Tool\nquery_client_data\nself-correction x3"]
 
-    F --> H[(pgvector<br/>dense + BM25<br/>RRF)]
-    G --> I[(PostgreSQL<br/>clients · transactions)]
+    F --> H[("pgvector\ndense + BM25 RRF")]
+    G --> I[("PostgreSQL\nclients / transactions")]
 
-    I -->|strip PII columns| G
-
-    F --> J[LLM Factory<br/>Vertex AI · Gemini]
+    F --> J["LLM Factory\nVertex AI / Gemini"]
     G --> J
 
-    J --> K[Langfuse<br/>Traces · Spans]
+    J --> K["Langfuse\nTraces / Spans"]
 ```
 
 ---
