@@ -82,7 +82,14 @@ _PII_COLUMNS = {"nom", "prenom", "email", "telephone", "date_naissance"}
 
 
 def _strip_pii(rows: list[dict]) -> list[dict]:
-    return [{k: v for k, v in row.items() if k not in _PII_COLUMNS} for row in rows]
+    filtered = []
+    for row in rows:
+        safe_row = {}
+        for column_name, value in row.items():
+            if column_name not in _PII_COLUMNS:
+                safe_row[column_name] = value
+        filtered.append(safe_row)
+    return filtered
 
 
 def _format_rows(rows: list[dict]) -> str:

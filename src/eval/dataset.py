@@ -32,3 +32,17 @@ MIXED_CASES = [
         "retrieval_query": "procédure litige transaction double débit CB",
     },
 ]
+
+# Question "both" adaptée au parallèle LangGraph :
+# les deux besoins (SQL + RAG) sont explicites depuis la question initiale,
+# pas besoin de voir les résultats SQL pour construire la query RAG.
+BOTH_CASES = [
+    {
+        "name": "both_solvabilite_leroy",
+        "input": (
+            "Sophie Leroy souhaite contracter un prêt de 15 000€. "
+            "Quels sont ses revenus mensuels et quelle est la procédure d'analyse de solvabilité ?"
+        ),
+        "retrieval_query": "procédure analyse solvabilité prêt revenus",
+    },
+]

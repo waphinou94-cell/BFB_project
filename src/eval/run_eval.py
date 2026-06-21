@@ -25,7 +25,7 @@ from src.llm_factory import get_llm
 from src.indexer.retriever import retrieve
 from src.agent.agent_react import build_react_agent
 from src.agent.agent_langgraph import build_langgraph_agent
-from src.eval.dataset import RAG_CASES, SQL_CASES, MIXED_CASES
+from src.eval.dataset import RAG_CASES, SQL_CASES, MIXED_CASES, BOTH_CASES
 
 
 # ─── Judge LLM ────────────────────────────────────────────────────────────────
@@ -122,9 +122,10 @@ def main():
     )
 
     SUITE = [
-        ("RAG",   RAG_CASES,   [relevancy, faithfulness]),
-        ("SQL",   SQL_CASES,   [relevancy, correctness]),
-        ("Mixte", MIXED_CASES, [relevancy, faithfulness]),
+        ("RAG",             RAG_CASES,   [relevancy, faithfulness]),
+        ("SQL",             SQL_CASES,   [relevancy, correctness]),
+        ("Mixte (chaîné)",  MIXED_CASES, [relevancy, faithfulness]),
+        ("Both (parallèle)", BOTH_CASES, [relevancy, faithfulness]),
     ]
 
     MODES = [
