@@ -30,6 +30,25 @@ graph TD
     J --> K["Langfuse\nTraces / Spans"]
 ```
 
+### Mode ReAct
+
+Boucle observe → think → act gérée automatiquement par `create_react_agent`. Le LLM décide à chaque étape quel tool appeler et peut s'adapter en fonction des résultats intermédiaires.
+
+![Graph ReAct](graph_react.png)
+
+### Mode LangGraph — fan-out conditionnel
+
+Un nœud `router` classifie la question en une seule décision (`rag` / `sql` / `both` / `direct`), puis dispatch vers les nœuds concernés. En mode `both`, `rag_node` et `sql_node` s'exécutent **en parallèle**. Le nœud `synthesis` agrège les résultats.
+
+![Graph LangGraph](graph_langgraph.png)
+
+| | ReAct | LangGraph |
+|---|---|---|
+| Routing | LLM décide à chaque tour | Une décision upfront |
+| Parallélisme | Non | Oui (`both`) |
+| Adaptatif (chained reasoning) | Oui | Non — RAG sans contexte SQL |
+| Flux de contrôle | Implicite (boucle) | Explicite (graph visible) |
+
 ---
 
 ## Prérequis
