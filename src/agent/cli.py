@@ -44,14 +44,42 @@ def _trace_node(node_name: str, state_update: dict) -> None:
     """Crée un span Langfuse pour un nœud du graph."""
     msgs = state_update.get("messages", [])
     last = msgs[-1] if msgs else None
+
+    # Construire input et output selon le type de nœud
+    tool_calls = getattr(last, "tool_calls", None) or []
+
+    if tool_calls:
+        # Nœud LLM qui décide d'appeler des tools
+        # (state_update ne contient que l'AIMessage produit, pas l'historique en entrée)
+        node_input = {}
+        node_output = {
+            "tool_calls": [
+                {"name": tc["name"], "args": tc.get("args", {})}
+                for tc in tool_calls
+            ]
+        }
+        meta = {"has_tool_calls": True, "tools": [tc["name"] for tc in tool_calls]}
+    elif last and type(last).__name__ == "ToolMessage":
+        # Nœud tools : on regroupe les résultats par nom d'outil
+        tool_results = {
+            m.name: _extract_text(m.content)[:500]
+            for m in msgs
+            if type(m).__name__ == "ToolMessage" and hasattr(m, "name")
+        }
+        node_input = {"tool_names": list(tool_results.keys())}
+        node_output = tool_results
+        meta = {"has_tool_calls": False, "tools": list(tool_results.keys())}
+    else:
+        # Nœud LLM de synthèse finale (pas de tool_calls)
+        node_input = {}
+        node_output = {"answer": _extract_text(last.content)[:1000] if last else ""}
+        meta = {"has_tool_calls": False}
+
     langfuse_context.update_current_observation(
         name=node_name,
-        input={"node": node_name, "n_messages": len(msgs)},
-        output={"content": _extract_text(last.content)[:1000]} if last else {},
-        metadata={
-            "message_type": type(last).__name__ if last else None,
-            "tool_calls": bool(getattr(last, "tool_calls", None)),
-        },
+        input=node_input,
+        output=node_output,
+        metadata=meta,
     )
 
 
@@ -64,21 +92,33 @@ def _run_turn(agent, messages: list, mode: str) -> list:
     return result["messages"]
 
 
+@observe()
 def _run_turn_traced(agent, messages: list, mode: str) -> list:
-    @observe(name=f"bforbank-{mode}")
-    def _inner():
-        # stream_mode="updates" → {node_name: state_update} à chaque nœud exécuté
-        accumulated = list(messages)
-        for event in agent.stream({"messages": messages}, stream_mode="updates"):
-            for node_name, state_update in event.items():
-                if node_name.startswith("__"):
-                    continue
-                _trace_node(node_name, state_update)
-                if "messages" in state_update:
-                    accumulated.extend(state_update["messages"])
-        return accumulated
+    # Nom dynamique via update (pattern fiable Langfuse 2.x, évite le bug name=null
+    # causé par @observe(name=...) appliqué sur une inner function/closure)
+    user_input = _extract_text(messages[-1].content) if messages else ""
+    langfuse_context.update_current_observation(
+        name=f"bforbank-{mode}",
+        input={"question": user_input},
+        metadata={"mode": mode},
+    )
+    langfuse_context.update_current_trace(tags=[mode])
 
-    return _inner()
+    accumulated = list(messages)
+    for event in agent.stream({"messages": messages}, stream_mode="updates"):
+        for node_name, state_update in event.items():
+            if node_name.startswith("__"):
+                continue
+            _trace_node(node_name, state_update)
+            if "messages" in state_update:
+                accumulated.extend(state_update["messages"])
+
+    # Output sur la trace racine = réponse finale
+    if accumulated:
+        langfuse_context.update_current_observation(
+            output={"answer": _extract_text(accumulated[-1].content)[:1000]}
+        )
+    return accumulated
 
 
 # ─────────────────────────────────────────────
