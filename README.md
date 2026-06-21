@@ -1,8 +1,8 @@
 # BforBank Agent — IA Copilote Conseiller
 
-Agent conversationnel **Agentic RAG** combinant recherche documentaire (procédures internes) et analyse de données transactionnelles (Text-to-SQL) pour assister les conseillers BforBank.
+Agent conversationnel **Agentic RAG** pour les conseillers BforBank : recherche de procédures internes (RAG sur Markdown) et analyse de données transactionnelles (Text-to-SQL sur PostgreSQL), disponible en deux modes d'exécution comparables.
 
-Le projet tourne sur **Vertex AI (Gemini)** et est conçu autour d'une factory de modèles (`src/llm_factory.py`) qui isole toute dépendance au provider derrière l'interface `BaseChatModel` de LangChain — brancher un autre provider ne demande aucune modification au code métier.
+Construit sur **LangGraph** + **Vertex AI (Gemini)**, avec une factory de modèles qui isole toute dépendance au provider (`src/llm_factory.py`) — changer de LLM ne touche pas au code métier.
 
 ---
 
@@ -32,13 +32,13 @@ graph TD
 
 ### Mode ReAct
 
-Boucle observe → think → act gérée automatiquement par `create_react_agent`. Le LLM décide à chaque étape quel tool appeler et peut s'adapter en fonction des résultats intermédiaires.
+Boucle observe → think → act via `create_react_agent`. Le LLM enchaîne les outils de façon adaptative : il peut appeler SQL, lire les résultats, puis construire une requête RAG ciblée.
 
 ![Graph ReAct](graph_react.png)
 
 ### Mode LangGraph — fan-out conditionnel
 
-Un nœud `router` classifie la question en une seule décision (`rag` / `sql` / `both` / `direct`), puis dispatch vers les nœuds concernés. En mode `both`, `rag_node` et `sql_node` s'exécutent **en parallèle**. Le nœud `synthesis` agrège les résultats.
+Un nœud `router` classifie la question (`rag` / `sql` / `both` / `direct`), puis dispatch. En mode `both`, `rag_node` et `sql_node` tournent **en parallèle**. Le nœud `synthesis` agrège.
 
 ![Graph LangGraph](graph_langgraph.png)
 
@@ -48,144 +48,98 @@ Un nœud `router` classifie la question en une seule décision (`rag` / `sql` / 
 | Parallélisme | Non | Oui (`both`) |
 | Adaptatif (chained reasoning) | Oui | Non — RAG sans contexte SQL |
 | Flux de contrôle | Implicite (boucle) | Explicite (graph visible) |
+| Tokens | Plus élevés (historique accumulé) | Réduits (nœuds isolés) |
 
 ---
 
 ## Prérequis
 
-| Outil | Version | Vérification |
-|-------|---------|--------------|
-| Docker + Docker Compose | 24+ | `docker --version` |
-| Python | 3.11+ | `python --version` |
-| uv | latest | `uv --version` |
-| gcloud CLI | latest | `gcloud --version` |
+| Outil | Version |
+|-------|---------|
+| Docker + Docker Compose | 24+ |
+| Python | 3.11+ |
+| uv | latest |
+| gcloud CLI | latest |
 
 ---
 
 ## Installation
 
-### 1. Authentification Google Cloud
-
 ```bash
+# 1. Authentification Google Cloud (ADC — pas de clé API)
 gcloud auth application-default login
-```
 
-> L'agent utilise les **Application Default Credentials (ADC)** — aucune clé API à gérer.
-
-### 2. Configurer l'environnement
-
-```bash
+# 2. Configuration
 cp .env.example .env
-```
+# Renseigner : VERTEX_PROJECT=your-gcp-project-id
 
-Renseigner au minimum :
-
-```bash
-VERTEX_PROJECT=your-gcp-project-id
-
-# Langfuse (optionnel — remplir après l'étape 3b)
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_HOST=http://localhost:3000
-```
-
-### 3. Démarrer les services
-
-```bash
+# 3. Services (PostgreSQL + Langfuse)
 docker compose up -d
-docker compose ps   # attendre STATUS: healthy
-```
 
-Lance deux services :
-- **PostgreSQL** (`localhost:5432`) — schéma et données de test injectés automatiquement
-- **Langfuse** (`http://localhost:3000`) — UI d'observabilité
-
-#### 3b. Configurer Langfuse (première fois)
-
-1. Ouvrir `http://localhost:3000`
-2. **Sign Up** → créer un compte local (rien n'est envoyé en dehors)
-3. Créer une organisation puis un projet (ex: `bforbank`)
-4. **Settings** → **API Keys** → **Create new API key**
-5. Copier `pk-lf-...` et `sk-lf-...` dans `.env`
-
-> **Sur une VM distante** : forwarder le port avant d'ouvrir le navigateur :
-> ```bash
-> ssh -L 3000:localhost:3000 <user>@<ip-vm>
-> ```
-
-### 4. Installer les dépendances Python
-
-```bash
+# 4. Dépendances Python
 uv sync
-```
 
-### 5. Indexer les procédures
-
-```bash
+# 5. Indexation des procédures dans pgvector
 uv run python src/indexer/indexer.py
+
+# 6. Lancer l'agent
+uv run python src/agent/cli.py                  # Mode ReAct
+uv run python src/agent/cli.py --mode langgraph # Mode LangGraph
 ```
 
-Génère les embeddings des fichiers `data/procedures/*.md` et les stocke dans pgvector (recherche hybride dense + tsvector BM25). Opération **idempotente**.
+### Langfuse (optionnel)
 
-### 6. Lancer l'agent
+1. Ouvrir `http://localhost:3000` → créer un compte local
+2. Créer un projet → **Settings** → **API Keys**
+3. Copier `pk-lf-...` et `sk-lf-...` dans `.env`
 
-```bash
-# Mode ReAct (défaut)
-uv run python src/agent/cli.py
-
-# Mode LangGraph — StateGraph custom avec nœuds explicites
-uv run python src/agent/cli.py --mode langgraph
-```
+> Sur VM distante : `ssh -L 3000:localhost:3000 <user>@<ip>`
 
 ---
 
 ## Configuration `.env`
 
-| Variable | Obligatoire | Description |
-|----------|-------------|-------------|
-| `VERTEX_PROJECT` | **oui** | GCP project ID |
-| `VERTEX_LOCATION` | non | Région Vertex AI (défaut : `global`) |
-| `LLM_MODEL` | non | Modèle Gemini (défaut : `gemini-3.1-flash-lite`) |
-| `EMBEDDING_MODEL` | non | Modèle d'embedding (défaut : `text-multilingual-embedding-002`) |
-| `DATABASE_URL` | non | URL PostgreSQL (défaut : `postgresql+psycopg://bforbank:bforbank@localhost:5432/bforbank`) |
-| `LANGFUSE_PUBLIC_KEY` | non | Clé publique Langfuse |
-| `LANGFUSE_SECRET_KEY` | non | Clé secrète Langfuse |
-| `LANGFUSE_HOST` | non | URL Langfuse (défaut : `http://localhost:3000`) |
+| Variable | Description |
+|----------|-------------|
+| `VERTEX_PROJECT` | GCP project ID **(obligatoire)** |
+| `VERTEX_LOCATION` | Région Vertex AI (défaut : `global`) |
+| `LLM_MODEL` | Modèle Gemini (défaut : `gemini-3.1-flash-lite`) |
+| `EMBEDDING_MODEL` | Modèle embedding (défaut : `text-multilingual-embedding-002`) |
+| `DATABASE_URL` | PostgreSQL (défaut : `postgresql+psycopg://bforbank:bforbank@localhost:5432/bforbank`) |
+| `LANGFUSE_PUBLIC_KEY` / `SECRET_KEY` / `HOST` | Observabilité (optionnel) |
 
-> Pour utiliser **OpenAI** à la place de Vertex AI : `LLM_PROVIDER=openai`, `LLM_API_KEY=sk-...`
+> Pour OpenAI à la place de Vertex AI : `LLM_PROVIDER=openai`, `LLM_API_KEY=sk-...`
 
 ---
 
-## Structure du projet
+## Structure
 
 ```
 bforbank-agent/
-├── docker-compose.yaml          # PostgreSQL + pgvector + Langfuse
-├── pyproject.toml               # Dépendances Python (uv)
-├── .env.example                 # Template de configuration
+├── docker-compose.yaml
 ├── data/
 │   ├── procedures/              # Procédures BforBank en Markdown
 │   └── mock/
-│       ├── schema.sql           # Schéma : clients, transactions
-│       └── seed.sql             # Données de test (4 clients)
+│       ├── schema.sql
+│       └── seed.sql             # 4 clients de test
 └── src/
-    ├── config.py                # Configuration via pydantic-settings
-    ├── llm_factory.py           # Factory LLM/Embeddings (abstraction provider)
+    ├── config.py
+    ├── llm_factory.py           # Abstraction provider (Vertex AI / OpenAI)
     ├── agent/
-    │   ├── cli.py               # Entrypoint CLI (--mode react|langgraph)
-    │   ├── agent_react.py       # Agent ReAct (create_react_agent prebuilt)
-    │   └── agent_langgraph.py   # Agent LangGraph (StateGraph custom)
+    │   ├── cli.py               # Entrypoint --mode react|langgraph
+    │   ├── agent_react.py       # create_react_agent prebuilt
+    │   └── agent_langgraph.py   # StateGraph fan-out custom
     ├── tools/
-    │   ├── rag_tool.py          # @tool retrieve_procedures — recherche hybride
-    │   ├── sql_tool.py          # @tool query_client_data — Text-to-SQL + self-correction ×3
-    │   └── schema_inspector.py  # DDL du schéma pour la génération SQL
+    │   ├── rag_tool.py          # retrieve_procedures
+    │   ├── sql_tool.py          # query_client_data + self-correction ×3
+    │   └── schema_inspector.py
     ├── indexer/
-    │   ├── indexer.py           # Indexation des procédures dans pgvector
-    │   └── retriever.py         # Recherche hybride dense + tsvector (RRF)
+    │   ├── indexer.py
+    │   └── retriever.py         # Recherche hybride dense + BM25 (RRF)
     ├── pii/
-    │   └── anonymizer.py        # Filtrage PII colonnes DB + patterns regex
+    │   └── anonymizer.py
     └── eval/
-        ├── dataset.py           # 3 questions d'évaluation (RAG, SQL, mixte)
+        ├── dataset.py           # 4 questions avec expected_output
         └── run_eval.py          # Comparaison ReAct vs LangGraph — DeepEval
 ```
 
@@ -193,83 +147,53 @@ bforbank-agent/
 
 ## Sécurité — Protection des PII
 
-Les données personnelles des clients (nom, prénom, email, téléphone, date de naissance) sont filtrées **en sortie de base de données**, avant injection dans le contexte du LLM.
+Les données personnelles (nom, prénom, email, téléphone, date de naissance) sont filtrées **en sortie de base de données**, avant injection dans le contexte du LLM.
 
-```python
-# sql_tool.py
-_PII_COLUMNS = {"nom", "prenom", "email", "telephone", "date_naissance"}
-
-def _strip_pii(rows):
-    return [{k: v for k, v in row.items() if k not in _PII_COLUMNS} for row in rows]
-```
-
-**Pourquoi en sortie et non en entrée ?** Masquer le nom dans la question du conseiller casserait le Text-to-SQL (`WHERE nom = '[PERSONNE_1]'` ne matche rien en base). La solution complète production-grade — alias mapping + SQL rewriter — est décrite dans `ARCHITECTURE_DECISIONS.md`.
+**Pourquoi en sortie et non en entrée ?** Masquer le nom dans la question casserait le Text-to-SQL (`WHERE nom = '[PERSONNE_1]'` ne matche rien). La solution production-grade — alias mapping + SQL rewriter — est documentée dans `ARCHITECTURE_DECISIONS.md`.
 
 ---
 
 ## Observabilité
 
-Langfuse trace chaque tour de conversation dès que les clés sont renseignées dans `.env`. Chaque nœud du graph apparaît comme un span enfant avec son input, output, et les tools appelés.
-
-```
-Trace : bforbank-langgraph  [tag: langgraph]
-├── input  : { question: "Quelles transactions suspectes pour Marie Martin ?" }
-├── Span : call_model  → tool_calls: ["query_client_data"]
-├── Span : tools       → résultats SQL filtrés
-├── Span : call_model  → tool_calls: ["retrieve_procedures"]
-├── Span : tools       → procédure litige
-└── Span : call_model  → réponse finale
-    output : { answer: "Marie Martin a 2 transactions LITIGE..." }
-```
-
-L'observabilité est **optionnelle** — si les clés sont absentes, l'agent fonctionne normalement.
+Langfuse trace chaque tour dès que les clés sont renseignées. Chaque nœud apparaît comme span enfant avec input, output et tools appelés. Sans clés, l'agent fonctionne normalement.
 
 ---
 
 ## Évaluation
 
-Comparaison quantitative des deux modes (ReAct vs LangGraph) sur 3 questions représentatives :
-
 ```bash
 uv run python src/eval/run_eval.py
 ```
 
-| Métrique | Type de question |
-|----------|-----------------|
-| `AnswerRelevancy` | toutes |
-| `Faithfulness` | RAG, mixte |
-| `GEval Correctness` | SQL |
-| Temps de réponse | toutes |
-| Nombre de tool calls | toutes |
-| Tokens consommés | toutes |
+Comparaison ReAct vs LangGraph sur 4 questions (RAG / SQL / Mixte / Both), chacune avec un `expected_output` de référence. Métriques : `AnswerRelevancy` + `GEval Correctness` (judge = même modèle Gemini). Un fichier `eval_audit_latest.json` est généré à chaque run avec les réponses complètes et les raisons du judge.
 
-Le judge LLM est le même modèle que l'agent (Gemini via Vertex AI) — aucune dépendance externe supplémentaire.
+La question mixte est intentionnellement vague ("Faites un bilan du compte…") pour mettre en défaut le fan-out parallèle : sans chaînage, le LangGraph ne sait pas quelle procédure chercher avant d'avoir vu les données SQL.
 
 ---
 
-## Scale & Ops — Du POC à la production
+## Scale & Ops
 
-| Composant | POC (actuel) | Production GCP |
-|-----------|-------------|----------------|
-| Base transactionnelle | PostgreSQL (Docker) | **AlloyDB** — PostgreSQL managé, HA, ~10× plus rapide sur les scans |
-| Recherche vectorielle | pgvector (même instance) | **Vertex AI Vector Search** — index ANN managé, scalable à des millions de vecteurs |
-| LLM | Gemini Flash Lite (Vertex AI) | Gemini Pro / fine-tuned — selon les exigences qualité |
-| Déploiement agent | CLI locale | **Cloud Run** (serverless) ou **GKE** si état persistant |
-| Observabilité | Langfuse self-hosted | Langfuse Cloud ou intégration **Cloud Monitoring** |
-| Évaluation | Manuel (`run_eval.py`) | CI/CD — exécution automatique sur chaque PR, régression bloquante si score < seuil |
-| PII | Filtrage colonnes (POC) | Alias mapping + SQL rewriter + LLM on-premise (Mistral/Llama sur GKE) |
+| Composant | POC | Production GCP |
+|-----------|-----|----------------|
+| Base transactionnelle | PostgreSQL (Docker) | **AlloyDB** |
+| Recherche vectorielle | pgvector | **Vertex AI Vector Search** |
+| LLM | Gemini Flash Lite | Gemini Pro / fine-tuned |
+| Déploiement | CLI locale | **Cloud Run** / GKE |
+| Observabilité | Langfuse self-hosted | Langfuse Cloud / Cloud Monitoring |
+| Évaluation | `run_eval.py` manuel | CI/CD — régression bloquante si score < seuil |
+| PII | Filtrage colonnes | Alias mapping + SQL rewriter + LLM on-premise |
 
 ---
 
 ## Utilitaires
 
 ```bash
-# Tester le retriever directement
+# Tester le retriever
 uv run python src/indexer/retriever.py "remboursement frais bancaires"
 
-# Accéder à la base de données
+# Accéder à la base
 docker exec -it bforbank_db psql -U bforbank -d bforbank
 
-# Réinitialisation complète
+# Reset complet
 docker compose down -v && docker compose up -d && uv run python src/indexer/indexer.py
 ```
