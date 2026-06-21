@@ -1,28 +1,31 @@
 """
-Évaluation DeepEval — comparaison ReAct vs LangGraph sur 3 questions
+Évaluation DeepEval — comparaison ReAct vs LangGraph sur 4 questions
 
 Usage :
     uv run python src/eval/run_eval.py
 
-Métriques :
-    RAG   → AnswerRelevancy + Faithfulness
-    SQL   → AnswerRelevancy + GEval Correctness
-    Mixte → AnswerRelevancy + Faithfulness
+Métriques (toutes les questions ont un expected_output) :
+    AnswerRelevancy  — la réponse répond-elle à la question ?
+    GEval Correctness — la réponse contient-elle les faits clés de l'expected_output ?
+
+Audit :
+    eval_audit_latest.json — réponses complètes + raisons du judge, pour vérifier l'éval.
 """
 
+import json
 import os
 import time
+from datetime import datetime
 
 os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "YES")
 
 from langchain_core.messages import HumanMessage
 from deepeval.models.base_model import DeepEvalBaseLLM
-from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric, GEval
-from deepeval.test_case import LLMTestCase, LLMTestCaseParams
+from deepeval.metrics import AnswerRelevancyMetric, GEval
+from deepeval.test_case import LLMTestCase, SingleTurnParams
 
 from src.config import settings
 from src.llm_factory import get_llm
-from src.indexer.retriever import retrieve
 from src.agent.agent_react import build_react_agent
 from src.agent.agent_langgraph import build_langgraph_agent
 from src.eval.dataset import RAG_CASES, SQL_CASES, MIXED_CASES, BOTH_CASES
@@ -74,7 +77,12 @@ def run_agent(agent, question: str) -> dict:
 
     messages = result["messages"]
 
-    tool_calls = sum(1 for m in messages if type(m).__name__ == "ToolMessage")
+    tool_msg_count = sum(1 for m in messages if type(m).__name__ == "ToolMessage")
+    if tool_msg_count == 0 and "route" in result:
+        route = result.get("route", "direct")
+        tool_calls = {"rag": 1, "sql": 1, "both": 2, "direct": 0}.get(route, 0)
+    else:
+        tool_calls = tool_msg_count
 
     tokens = sum(
         (m.usage_metadata or {}).get("total_tokens", 0)
@@ -83,24 +91,37 @@ def run_agent(agent, question: str) -> dict:
     )
 
     return {
-        "output": _extract_text(messages[-1].content),
-        "time": elapsed,
+        "output":     _extract_text(messages[-1].content),
+        "time":       elapsed,
         "tool_calls": tool_calls,
-        "tokens": tokens,
+        "tokens":     tokens,
+        "route":      result.get("route", ""),
     }
 
 
-def get_context(query: str) -> list[str]:
-    return [r["content"] for r in retrieve(query, k=5)]
+def make_correctness_metric(judge) -> GEval:
+    return GEval(
+        name="Correctness",
+        criteria=(
+            "The actual output contains the key factual elements from the expected output: "
+            "correct amounts, names, procedure references (CONF-BFB-xxx), required actions, "
+            "and transaction statuses. Minor phrasing differences are acceptable. "
+            "Penalize missing key facts or contradictory information."
+        ),
+        evaluation_params=[SingleTurnParams.ACTUAL_OUTPUT, SingleTurnParams.EXPECTED_OUTPUT],
+        threshold=0.5,
+        model=judge,
+    )
 
 
-def measure(metric, tc: LLMTestCase) -> tuple[float, bool]:
+def measure(metric, tc: LLMTestCase) -> tuple[float, bool, str]:
     try:
         metric.measure(tc)
-        return metric.score, metric.score >= metric.threshold
+        reason = getattr(metric, "reason", "") or ""
+        return metric.score, metric.score >= metric.threshold, reason
     except Exception as e:
         print(f"    ⚠️  {metric.__class__.__name__} erreur : {e}")
-        return 0.0, False
+        return 0.0, False, f"ERREUR: {e}"
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -108,133 +129,186 @@ def measure(metric, tc: LLMTestCase) -> tuple[float, bool]:
 def main():
     judge = GeminiVertexJudge()
 
-    relevancy   = AnswerRelevancyMetric(threshold=0.5, model=judge, include_reason=False)
-    faithfulness = FaithfulnessMetric(threshold=0.5, model=judge, include_reason=False)
-    correctness  = GEval(
-        name="Correctness",
-        criteria=(
-            "The actual output contains the key factual information from the expected output "
-            "(monetary amounts, names, transaction counts). Minor formatting differences are acceptable."
-        ),
-        evaluation_params=[LLMTestCaseParams.ACTUAL_OUTPUT, LLMTestCaseParams.EXPECTED_OUTPUT],
-        threshold=0.5,
-        model=judge,
-    )
+    relevancy = AnswerRelevancyMetric(threshold=0.5, model=judge, include_reason=True)
 
     SUITE = [
-        ("RAG",             RAG_CASES,   [relevancy, faithfulness]),
-        ("SQL",             SQL_CASES,   [relevancy, correctness]),
-        ("Mixte (chaîné)",  MIXED_CASES, [relevancy, faithfulness]),
-        ("Both (parallèle)", BOTH_CASES, [relevancy, faithfulness]),
+        ("RAG",              RAG_CASES),
+        ("SQL",              SQL_CASES),
+        ("Mixte (chaîné)",   MIXED_CASES),
+        ("Both (parallèle)", BOTH_CASES),
     ]
 
     MODES = [
-        ("ReAct",      build_react_agent()),
-        ("LangGraph",  build_langgraph_agent()),
+        ("ReAct",     build_react_agent()),
+        ("LangGraph", build_langgraph_agent()),
     ]
 
-    # scores[case_name][metric_name][mode_name] = (score, passed)
     scores: dict = {}
-    # Collecte des réponses pour affichage
-    answers: dict = {}
-
-    print("\n" + "═" * 76)
-    print("  BforBank Eval — ReAct vs LangGraph")
-    print(f"  Judge : {settings.llm_model} [{settings.llm_provider}]")
-    print("═" * 76)
-
-    # perf[case_name][mode_name] = {time, tool_calls, tokens}
     perf: dict = {}
+    audit = {
+        "timestamp": datetime.now().isoformat(),
+        "judge":     settings.llm_model,
+        "provider":  settings.llm_provider,
+        "cases":     [],
+    }
 
-    for case_type, cases, metrics in SUITE:
-        print(f"\n── {case_type} {'─' * (70 - len(case_type))}")
+    W = 88  # largeur table
+    n_cases = sum(len(cases) for _, cases in SUITE)
+
+    print("\n" + "═" * W)
+    print(f"  BforBank Eval — ReAct vs LangGraph   |   Judge : {settings.llm_model} [{settings.llm_provider}]")
+    print("═" * W)
+
+    case_index = 0
+    for case_type, cases in SUITE:
         for case in cases:
+            case_index += 1
             name = case["name"]
             scores[name] = {}
-            answers[name] = {}
             perf[name] = {}
-            ctx = get_context(case["retrieval_query"]) if "retrieval_query" in case else []
 
-            print(f"\n  Q : {case['input'][:90]}")
+            audit_case = {
+                "name":            name,
+                "type":            case_type,
+                "input":           case["input"],
+                "expected_output": case["expected_output"],
+                "modes":           {},
+            }
+
+            # ── Progression minimale ──────────────────────────────────────
+            q_short = case["input"][:75] + ("…" if len(case["input"]) > 75 else "")
+            print(f"\n  [{case_index}/{n_cases}] {case_type.upper()} — {q_short}")
+
+            correctness = make_correctness_metric(judge)
+            metrics = [relevancy, correctness]
 
             for mode_name, agent in MODES:
+                print(f"    → {mode_name:<10} ", end="", flush=True)
                 stats = run_agent(agent, case["input"])
-                answers[name][mode_name] = stats["output"]
                 perf[name][mode_name] = stats
-                print(f"  [{mode_name}] {stats['output'][:100]}{'...' if len(stats['output']) > 100 else ''}")
+                route_tag = f"  [route={stats['route']}]" if stats.get("route") else ""
+                print(f"{stats['time']:.1f}s  {stats['tool_calls']} tool(s)  {stats['tokens'] or '?'} tok{route_tag}")
 
                 tc = LLMTestCase(
                     input=case["input"],
                     actual_output=stats["output"],
-                    expected_output=case.get("expected_output"),
-                    retrieval_context=ctx or None,
+                    expected_output=case["expected_output"],
                 )
+
+                audit_mode = {
+                    "output":     stats["output"],
+                    "route":      stats["route"],
+                    "tool_calls": stats["tool_calls"],
+                    "time_s":     round(stats["time"], 2),
+                    "tokens":     stats["tokens"],
+                    "metrics":    {},
+                }
 
                 for metric in metrics:
                     mname = getattr(metric, "name", metric.__class__.__name__)
                     if mname not in scores[name]:
                         scores[name][mname] = {}
-                    scores[name][mname][mode_name] = measure(metric, tc)
+                    score, passed, reason = measure(metric, tc)
+                    scores[name][mname][mode_name] = (score, passed)
+                    audit_mode["metrics"][mname] = {
+                        "score":  round(score, 3),
+                        "passed": passed,
+                        "reason": reason,
+                    }
 
-            # Tableau qualité
-            print()
-            print(f"  {'Qualité':<28} {'ReAct':>10} {'LangGraph':>12}")
-            print(f"  {'─' * 28} {'─' * 10} {'─' * 12}")
-            for metric in metrics:
-                mname = getattr(metric, "name", metric.__class__.__name__)
-                r_score, r_pass = scores[name][mname].get("ReAct", (0.0, False))
-                l_score, l_pass = scores[name][mname].get("LangGraph", (0.0, False))
-                r_str = f"{'✅' if r_pass else '❌'} {r_score:.2f}"
-                l_str = f"{'✅' if l_pass else '❌'} {l_score:.2f}"
-                print(f"  {mname:<28} {r_str:>10} {l_str:>12}")
+                audit_case["modes"][mode_name] = audit_mode
 
-            # Tableau performance
-            print()
-            print(f"  {'Performance':<28} {'ReAct':>10} {'LangGraph':>12}")
-            print(f"  {'─' * 28} {'─' * 10} {'─' * 12}")
-            for label, key, fmt in [
-                ("Temps (s)",   "time",       lambda v: f"{v:.1f}s"),
-                ("Tool calls",  "tool_calls", lambda v: str(v)),
-                ("Tokens",      "tokens",     lambda v: str(v) if v > 0 else "n/d"),
-            ]:
-                r_val = perf[name].get("ReAct", {}).get(key, 0)
-                l_val = perf[name].get("LangGraph", {}).get(key, 0)
-                print(f"  {label:<28} {fmt(r_val):>10} {fmt(l_val):>12}")
+            audit["cases"].append(audit_case)
 
-    # Résumé global
-    all_react = [(s, p) for cn in scores for mn in scores[cn] for s, p in [scores[cn][mn].get("ReAct", (0.0, False))]]
-    all_lg    = [(s, p) for cn in scores for mn in scores[cn] for s, p in [scores[cn][mn].get("LangGraph", (0.0, False))]]
+    # ── Tableau récapitulatif complet ─────────────────────────────────────────
+    #
+    # colonnes : # | Type | Question | Mode | Relev | Correct | Tps | Tools | Tokens
+    #
+    C = {"n": 2, "type": 8, "q": 32, "mode": 14, "rel": 9, "cor": 9, "tps": 6, "tc": 5, "tok": 7}
 
+    def row(n, typ, q, mode, rel, cor, tps, tc_, tok):
+        return (
+            f"  {str(n):<{C['n']}} {typ:<{C['type']}} {q:<{C['q']}} {mode:<{C['mode']}}"
+            f" {rel:>{C['rel']}} {cor:>{C['cor']}} {tps:>{C['tps']}} {str(tc_):>{C['tc']}} {str(tok):>{C['tok']}}"
+        )
+
+    header = row("#", "Type", "Question", "Mode", "Relevancy", "Correct", "Tps", "TC", "Tokens")
+    sep    = "  " + "─" * (W - 2)
+    sep2   = "  " + "═" * (W - 2)
+
+    print("\n" + "═" * W)
+    print("  RÉSULTATS COMPLETS")
+    print(sep2)
+    print(header)
+    print(sep)
+
+    all_react, all_lg = [], []
+    case_index = 0
+    for case_type, cases in SUITE:
+        for case in cases:
+            case_index += 1
+            name     = case["name"]
+            q_label  = case["input"][:C["q"]].rstrip()
+            type_short = {"RAG": "RAG", "SQL": "SQL", "Mixte (chaîné)": "Mixte", "Both (parallèle)": "Both"}.get(case_type, case_type[:8])
+
+            for i, (mode_name, _) in enumerate(MODES):
+                p = perf[name].get(mode_name, {})
+                route = p.get("route", "")
+                mode_label = f"{mode_name}{f'/{route}' if route else ''}"
+
+                mnames = list(scores[name].keys())
+                rel_s, rel_p = scores[name].get(mnames[0], {}).get(mode_name, (0.0, False)) if mnames else (0.0, False)
+                cor_s, cor_p = scores[name].get(mnames[1], {}).get(mode_name, (0.0, False)) if len(mnames) > 1 else (0.0, False)
+
+                rel_str = f"{'✅' if rel_p else '❌'} {rel_s:.2f}"
+                cor_str = f"{'✅' if cor_p else '❌'} {cor_s:.2f}"
+                tps_str = f"{p.get('time', 0):.1f}s"
+                tok_str = str(p.get("tokens", 0)) + ("*" if mode_name == "LangGraph" else "")
+
+                n_str = str(case_index) if i == 0 else ""
+                t_str = type_short        if i == 0 else ""
+                q_str = q_label           if i == 0 else ""
+
+                print(row(n_str, t_str, q_str, mode_label, rel_str, cor_str, tps_str, p.get("tool_calls", 0), tok_str))
+
+                (all_react if mode_name == "ReAct" else all_lg).extend([(rel_s, rel_p), (cor_s, cor_p)])
+
+            if case_index < n_cases:
+                print(sep)
+
+    # ── Résumé global ─────────────────────────────────────────────────────────
     def quality_summary(results):
         passed = sum(1 for _, p in results if p)
-        avg = sum(s for s, _ in results) / len(results) if results else 0
+        avg    = sum(s for s, _ in results) / len(results) if results else 0
         return passed, len(results), avg
 
     def perf_summary(mode):
         times  = [perf[cn][mode]["time"]       for cn in perf if mode in perf[cn]]
         tools  = [perf[cn][mode]["tool_calls"]  for cn in perf if mode in perf[cn]]
         tokens = [perf[cn][mode]["tokens"]      for cn in perf if mode in perf[cn]]
-        return (
-            sum(times) / len(times) if times else 0,
-            sum(tools),
-            sum(tokens),
-        )
+        return sum(times)/len(times) if times else 0, sum(tools), sum(tokens)
 
     rp, rt, ra = quality_summary(all_react)
     lp, lt, la = quality_summary(all_lg)
     r_time, r_tools, r_tok = perf_summary("ReAct")
     l_time, l_tools, l_tok = perf_summary("LangGraph")
 
-    print("\n" + "═" * 76)
-    print(f"  RÉSUMÉ{'':22} {'ReAct':>10} {'LangGraph':>12}")
-    print(f"  {'─' * 28} {'─' * 10} {'─' * 12}")
-    print(f"  {'Qualité ≥ seuil':<28} {f'{rp}/{rt}':>10} {f'{lp}/{lt}':>12}")
-    print(f"  {'Score moyen':<28} {ra:>10.2f} {la:>12.2f}")
-    print(f"  {'─' * 28} {'─' * 10} {'─' * 12}")
-    print(f"  {'Temps moyen / question':<28} {f'{r_time:.1f}s':>10} {f'{l_time:.1f}s':>12}")
-    print(f"  {'Tool calls total':<28} {r_tools:>10} {l_tools:>12}")
-    print(f"  {'Tokens total':<28} {r_tok if r_tok else 'n/d':>10} {l_tok if l_tok else 'n/d':>12}")
-    print("═" * 76 + "\n")
+    print(sep2)
+    print(f"  {'RÉSUMÉ':<20} {'ReAct':>18} {'LangGraph':>18}")
+    print(sep)
+    print(f"  {'Qualité ≥ seuil':<20} {f'{rp}/{rt}':>18} {f'{lp}/{lt}':>18}")
+    print(f"  {'Score moyen':<20} {ra:>18.2f} {la:>18.2f}")
+    print(sep)
+    print(f"  {'Temps moyen / Q':<20} {f'{r_time:.1f}s':>18} {f'{l_time:.1f}s':>18}")
+    print(f"  {'Tool calls total':<20} {r_tools:>18} {l_tools:>18}")
+    print(f"  {'Tokens total':<20} {f'{r_tok}':>18} {f'{l_tok}*':>18}")
+    print(sep2)
+    print(f"  * LangGraph : tokens du nœud router non comptabilisés\n")
+
+    audit_path = "eval_audit_latest.json"
+    with open(audit_path, "w", encoding="utf-8") as f:
+        json.dump(audit, f, ensure_ascii=False, indent=2)
+    print(f"  Audit → {audit_path}\n")
 
 
 if __name__ == "__main__":
