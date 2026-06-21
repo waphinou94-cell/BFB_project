@@ -76,6 +76,15 @@ def _execute_sql(sql: str) -> list[dict]:
         return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+# Colonnes PII de la table clients — jamais transmises au LLM
+# Le LLM n'en a pas besoin : il connaît déjà le client via la question du conseiller
+_PII_COLUMNS = {"nom", "prenom", "email", "telephone", "date_naissance"}
+
+
+def _strip_pii(rows: list[dict]) -> list[dict]:
+    return [{k: v for k, v in row.items() if k not in _PII_COLUMNS} for row in rows]
+
+
 def _format_rows(rows: list[dict]) -> str:
     if not rows:
         return "La requête n'a retourné aucun résultat."
@@ -102,7 +111,7 @@ def query_client_data(question: str) -> str:
 
     for attempt in range(3):
         try:
-            rows = _execute_sql(sql)
+            rows = _strip_pii(_execute_sql(sql))
             result = _format_rows(rows)
             return f"SQL exécuté (tentative {attempt + 1}):\n```sql\n{sql}\n```\n\nRésultats:\n{result}"
         except Exception as e:
