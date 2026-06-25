@@ -10,7 +10,6 @@ RAG_CASES = [
     {
         "name": "rag_litige",
         "input": "Quelle est la procédure pour contester une transaction CB en litige ?",
-        "retrieval_query": "procédure litige transaction CB contestation",
         "expected_output": (
             "La procédure CONF-BFB-002 encadre la contestation de transaction CB. "
             "Étapes : identifier la transaction, vérifier les délais réglementaires "
@@ -34,7 +33,6 @@ MIXED_CASES = [
     {
         "name": "mixed_anomalies_martin",
         "input": "Faites un bilan du compte de Marie Martin et dites-moi ce qu'il faut faire.",
-        "retrieval_query": "procédure litige transaction double débit CB",
         "expected_output": (
             "Marie Martin a 3 transactions problématiques : "
             "deux débits identiques ZARA BOUTIQUE OPERA de 245€ en statut LITIGE (double débit), "
@@ -55,7 +53,6 @@ BOTH_CASES = [
             "Sophie Leroy souhaite contracter un prêt de 15 000€. "
             "Quels sont ses revenus mensuels et quelle est la procédure d'analyse de solvabilité ?"
         ),
-        "retrieval_query": "procédure analyse solvabilité prêt revenus",
         "expected_output": (
             "Aucun revenu mensuel récurrent identifié pour Sophie Leroy dans la base transactionnelle. "
             "Procédure applicable : CONF-BFB-004 (analyse de solvabilité). "
